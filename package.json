@@ -1,0 +1,17 @@
+{
+  "description": "Adds a hyperlink button to the toolbar to allow adding/removing links to text.",
+  "name": "ep_hyperlinked_text",
+  "version": "0.1.1",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "DCastelone"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dcastelone/ep_hyperlinked_text"
+  }
+}

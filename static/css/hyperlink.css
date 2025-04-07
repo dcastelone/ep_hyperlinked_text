@@ -1,0 +1,6 @@
+/* Style for the hyperlink class added to text */
+.hyperlink {
+  color: blue;
+  text-decoration: underline;
+  cursor: pointer;
+}
