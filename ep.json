@@ -5,7 +5,6 @@
       "client_hooks": {
         "postAceInit": "ep_hyperlinked_text/static/js/index",
         "aceInitialized": "ep_hyperlinked_text/static/js/index",
-        "aceEditEvent": "ep_hyperlinked_text/static/js/index",
         "aceEditorCSS": "ep_hyperlinked_text/static/js/index",
         "aceCreateDomLine": "ep_hyperlinked_text/static/js/index",
         "postToolbarInit": "ep_hyperlinked_text/static/js/index",
