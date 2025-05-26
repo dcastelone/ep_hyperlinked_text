@@ -17,7 +17,7 @@
     "hyperlink",
     "link",
     "url"
-  ], 
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/dcastelone/ep_hyperlinked_text"

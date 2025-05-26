@@ -16,7 +16,8 @@
         "collectContentPre": "ep_hyperlinked_text/static/js/shared",
         "collectContentPost": "ep_hyperlinked_text/static/js/shared",
         "exportHtmlAdditionalTagsWithData": "ep_hyperlinked_text/exportHTML",
-        "stylesForExport": "ep_hyperlinked_text/exportHTML"
+        "stylesForExport": "ep_hyperlinked_text/exportHTML",
+        "getLineHTMLForExport": "ep_hyperlinked_text/exportHTML"
       }
     }
   ]

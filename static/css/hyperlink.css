@@ -1,6 +1,18 @@
-/* Style for the hyperlink class added to text */
-.hyperlink {
-  color: blue;
-  text-decoration: underline;
+/* Style for the <a> tag within the hyperlink span to ensure wrapping */
+.hyperlink a {
+  color: blue; /* Or inherit if blue is the desired default and not set by other a styles */
+  text-decoration: underline; /* Or inherit if underline is the desired default */
   cursor: pointer;
+
+  /* Crucial for wrapping long URLs */
+  white-space: normal !important;
+  overflow-wrap: break-word !important;
+  word-break: break-word !important; /* Consider 'break-all' if 'break-word' is still not enough, but 'break-word' is generally preferred */
+}
+
+/* The .hyperlink class itself is on the span wrapper. 
+   It might not need specific styles here if all visual/wrapping is handled by '.hyperlink a'.
+   If the span needs to behave like a block or inline-block for some layout reason (unlikely for this issue), add here. */
+.hyperlink {
+  /* Example: display: inline-block; if that were necessary for some edge case. */
 }

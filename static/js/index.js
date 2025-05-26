@@ -1,14 +1,217 @@
 'use strict';
 
-const DEBUG = false; // Set to true to enable console logging
+const DEBUG = true; // Set to true to enable console logging
 
-// All our colors are block elements, so we just return them.
-const colors = ['black', 'red', 'green', 'blue', 'yellow', 'orange'];
 
 // Bind the event handler to the toolbar button
 const postAceInit = (hook, context) => {
-  // Can potentially add handlers for the input container here if needed,
-  // but postToolbarInit seems more appropriate for the main logic.
+  const DEBUG_PASTE = DEBUG; // Use existing DEBUG flag
+  if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] postAceInit for paste handler setup.');
+
+  context.ace.callWithAce((ace) => {
+    const $innerIframe = $('iframe[name="ace_outer"]').contents().find('iframe[name="ace_inner"]');
+    if ($innerIframe.length === 0) {
+      console.error('[ep_hyperlinked_text] Could not find inner iframe (ace_inner) for paste handler.');
+      return;
+    }
+    const $inner = $($innerIframe.contents().find('body'));
+    if ($inner.length === 0) {
+      console.error('[ep_hyperlinked_text] Could not get body from inner iframe for paste handler.');
+      return;
+    }
+
+    $inner.on('paste', (evt) => {
+      if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] Paste event triggered.');
+      const clipboardData = evt.originalEvent.clipboardData;
+      if (!clipboardData) {
+        if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] No clipboard data found.');
+        return;
+      }
+
+      const types = clipboardData.types;
+      let htmlContent = null;
+      if (types && types.includes('text/html')) {
+        htmlContent = clipboardData.getData('text/html');
+      }
+
+      if (htmlContent) {
+        if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] HTML content found in clipboard.');
+        evt.preventDefault();
+        handleHtmlPaste(htmlContent, context, ace); // Pass ace editor instance
+      } else {
+        if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] No HTML content in clipboard, allowing default paste.');
+        // Allow default paste for plain text or other types
+      }
+    });
+    if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] Paste handler attached to inner editor body.');
+  }, 'setupPasteHandlerForHyperlink', true);
+};
+
+// New function to handle HTML paste logic
+const handleHtmlPaste = function(html, outerContext, aceEditor) {
+  const DEBUG_PASTE = DEBUG;
+  if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] handleHtmlPaste received HTML:', html.substring(0, 200));
+
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = html;
+
+  const segments = [];
+
+  function extractSegmentsRecursive(node, inheritedUrl) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent.length > 0) {
+        segments.push({text: node.textContent, url: inheritedUrl});
+      }
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      let currentUrl = inheritedUrl;
+      if (node.nodeName === 'A' && node.getAttribute('href')) {
+        const href = node.getAttribute('href');
+        if (href && href.trim() !== '' && !href.trim().toLowerCase().startsWith('javascript:')) {
+          if (!/^(https?:\/\/|mailto:|ftp:|file:|#|\/)/i.test(href)) {
+            currentUrl = `http://${href}`;
+          } else {
+            currentUrl = href;
+          }
+        } else {
+          currentUrl = null;
+        }
+      }
+
+      if (node.childNodes.length > 0) {
+        for (let i = 0; i < node.childNodes.length; i++) {
+          extractSegmentsRecursive(node.childNodes[i], currentUrl);
+        }
+      } else if (node.textContent && node.textContent.length > 0 && node.nodeName !== 'A') {
+        segments.push({text: node.textContent, url: currentUrl});
+      }
+    }
+  }
+
+  for (let i = 0; i < tempDiv.childNodes.length; i++) {
+    extractSegmentsRecursive(tempDiv.childNodes[i], null);
+  }
+
+  if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] Extracted Segments:', JSON.stringify(segments));
+
+  if (segments.length === 0 && tempDiv.textContent.length > 0) {
+      if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] No segments, but HTML has text. Inserting plain text of HTML.');
+      segments.push({text: tempDiv.textContent, url: null});
+  }
+
+  if (segments.length === 0) {
+    if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] No segments extracted, doing nothing further.');
+    return;
+  }
+
+  // The actual document modification logic, to be wrapped in ace_callWithAce
+  const performPasteInAceContext = (ace) => {
+    const rep = ace.ace_getRep();
+    let selStart = rep.selStart;
+    let selEnd = rep.selEnd;
+    // const docMan = outerContext.documentAttributeManager; // No longer needed
+
+    if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Initial selection: START L${selStart[0]}C${selStart[1]}, END L${selEnd[0]}C${selEnd[1]}`);
+
+    if (selStart[0] !== selEnd[0] || selStart[1] !== selEnd[1]) {
+      if (DEBUG_PASTE) console.log('[ep_hyperlinked_text ACE_CONTEXT] Clearing existing selection.');
+      ace.ace_performDocumentReplaceRange(selStart, selEnd, '');
+      selEnd = selStart;
+      if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Selection after clearing: START L${selStart[0]}C${selStart[1]}, END L${selEnd[0]}C${selEnd[1]}`);
+    }
+
+    let currentLine = selStart[0];
+    let currentCol = selStart[1];
+
+    if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Starting insertion at L${currentLine}C${currentCol}`);
+
+    for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+      const segment = segments[segIdx];
+      if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Processing Segment ${segIdx}:`, JSON.stringify(segment));
+      
+      const textToInsert = segment.text;
+
+      // Insert a conditional leading space if needed between segments
+      if (segIdx > 0) {
+        const previousSegment = segments[segIdx - 1];
+        if (previousSegment.text.length > 0 &&  // Previous segment had text
+            textToInsert.length > 0 &&          // Current segment has text
+            !/\s$/.test(previousSegment.text) && // Previous segment does not end with whitespace
+            !/^\s/.test(textToInsert)) {         // Current segment does not start with whitespace
+          
+          if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}: Inserting conditional leading space.`);
+          const spaceInsertPos = [currentLine, currentCol];
+          ace.ace_performDocumentReplaceRange(spaceInsertPos, spaceInsertPos, ' ');
+          // Update cursor position after inserting the space
+          const repAfterSpace = ace.ace_getRep();
+          currentLine = repAfterSpace.selEnd[0];
+          currentCol = repAfterSpace.selEnd[1];
+          if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}: Cursor after conditional space L${currentLine}C${currentCol}`);
+        }
+      }
+
+      // Insert the actual text of the segment (if it has any)
+      if (textToInsert.length > 0) {
+        const actualTextStartLine = currentLine;
+        const actualTextStartCol = currentCol;
+        
+        if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}: Before inserting "${textToInsert.replace(/\n/g, "<NL>")}" at L${actualTextStartLine}C${actualTextStartCol}`);
+        ace.ace_performDocumentReplaceRange([actualTextStartLine, actualTextStartCol], [actualTextStartLine, actualTextStartCol], textToInsert);
+        if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}: After inserting text.`);
+
+        // Update cursor position to be after the inserted text
+        const repAfterText = ace.ace_getRep();
+        const textEndLine = repAfterText.selEnd[0];
+        const textEndCol = repAfterText.selEnd[1];
+
+        // Apply attributes if there's a URL
+        if (segment.url) {
+          if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}: Applying link ${segment.url} to text "${textToInsert.replace(/\n/g, "<NL>")}"`);
+          
+          let applyLine = actualTextStartLine;
+          let applyCol = actualTextStartCol;
+          const linesOfSegment = textToInsert.split('\n');
+
+          for (let i = 0; i < linesOfSegment.length; i++) {
+            const linePart = linesOfSegment[i];
+            if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}, LinePart ${i}: Text "${linePart}" for attribute`);
+            if (linePart.length > 0) {
+              const attrRangeStart = [applyLine, applyCol];
+              const attrRangeEnd = [applyLine, applyCol + linePart.length];
+              if (DEBUG_PASTE) console.log(`  [ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}, LinePart ${i}: Before applying hyperlink '${segment.url}' to range [L${attrRangeStart[0]}C${attrRangeStart[1]}] - [L${attrRangeEnd[0]}C${attrRangeEnd[1]}] using ace.ace_performDocumentApplyAttributesToRange`);
+              try {
+                ace.ace_performDocumentApplyAttributesToRange(attrRangeStart, attrRangeEnd, [['hyperlink', segment.url]]);
+                if (DEBUG_PASTE) console.log(`  [ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}, LinePart ${i}: After applying hyperlink.`);
+              } catch (e) {
+                if (DEBUG_PASTE) console.error(`  [ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}, LinePart ${i}: ERROR applying hyperlink:`, e);
+                if (DEBUG_PASTE) console.error(`  [ep_hyperlinked_text ACE_CONTEXT] Error details - Method: ace.ace_performDocumentApplyAttributesToRange, URL: ${segment.url}, RangeStart: L${applyRangeStart[0]}C${applyRangeStart[1]}, RangeEnd: L${applyRangeEnd[0]}C${applyRangeEnd[1]}`);
+              }
+            }
+            if (i < linesOfSegment.length - 1) { // If there's another line in this segment
+              applyLine++;
+              applyCol = 0; // Next line part starts at column 0
+              if (DEBUG_PASTE) console.log(`  [ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}, LinePart ${i}: Newline in segment, next attr part starts L${applyLine}C${applyCol}`);
+            }
+          }
+        }
+        currentLine = textEndLine;
+        currentCol = textEndCol;
+      } else {
+        if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx} has no text to insert, skipping text insertion.`);
+      }
+      if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Segment ${segIdx}: Cursor after segment processing L${currentLine}C${currentCol}`);
+    }
+
+    if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Finished processing all segments. Final cursor L${currentLine}C${currentCol}`);
+    ace.ace_performSelectionChange([currentLine, currentCol], [currentLine, currentCol], false);
+    ace.ace_focus();
+    if (DEBUG_PASTE) console.log('[ep_hyperlinked_text ACE_CONTEXT] performPasteInAceContext finished.');
+  };
+
+  // Call the paste logic within the Ace call stack
+  if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] Calling performPasteInAceContext via ace_callWithAce.');
+  aceEditor.ace_callWithAce(performPasteInAceContext, 'handleHyperlinkPaste', true);
+  if (DEBUG_PASTE) console.log('[ep_hyperlinked_text] Returned from ace_callWithAce for performPasteInAceContext.');
+
 };
 
 // Add specific class for hyperlink attribute
@@ -45,21 +248,16 @@ exports.aceCreateDomLine = (name, context) => {
 // Accepts url, selStart, selEnd, and the captured rep object.
 // Uses this context for editorInfo/docMan.
 const doInsertLink = function (url, selStart, selEnd, rep) {
-  // Get the manager and editorInfo directly from the bound context (`this`)
-  const docMan = this.documentAttributeManager;
   const editorInfo = this.editorInfo;
+  const docMan = this.documentAttributeManager; // Use docMan from the context
 
-  // Basic check for necessary components from `this` context
   if (!docMan || !editorInfo || !selStart || !selEnd) {
     console.error('[[ep_hyperlinked_text]] Missing docMan, editorInfo (from this), or selection range passed to doInsertLink');
     alert('Could not apply link: Invalid editor state.');
     return;
   }
-  // Also check if the passed rep object is valid for multi-line check
   if (!rep || !rep.lines) {
     console.error('[[ep_hyperlinked_text]] Missing rep object needed for multi-line check.');
-    // Decide if we should abort or just skip multi-line check
-    // Aborting seems safer if multi-line handling is needed.
     alert('Could not apply link: Missing editor representation data.');
     return;
   }
@@ -68,16 +266,13 @@ const doInsertLink = function (url, selStart, selEnd, rep) {
   if (selStart[0] !== selEnd[0]) {
     if (DEBUG) console.warn('[[ep_hyperlinked_text]] Multi-line selection detected. Linking only the first line.');
     try {
-        // Get line length from the passed rep object
         const line = rep.lines.atIndex(selStart[0]);
         if (!line || typeof line.text !== 'string') {
              throw new Error('Line data not found in rep object.');
         }
         const lineLength = line.text.length;
-        // Adjust selEnd to the end of the first line
         selEnd = [selStart[0], lineLength]; 
         if (DEBUG) console.log('[[ep_hyperlinked_text]] Adjusted selEnd for first line using rep:', selEnd);
-        // Ensure selStart does not go beyond the adjusted selEnd if selection was minimal
         if (selStart[1] > selEnd[1]) {
              selStart[1] = selEnd[1];
              if (DEBUG) console.log('[[ep_hyperlinked_text]] Adjusted selStart to match end of short line:', selStart);
@@ -90,40 +285,37 @@ const doInsertLink = function (url, selStart, selEnd, rep) {
   }
   // --- End adjustment --- 
 
-  // If no URL provided (normalized to null), remove attribute
   if (!url) {
-    if (DEBUG) console.log('[[ep_hyperlinked_text]] Removing hyperlink attribute from range:', selStart, selEnd);
-    docMan.removeAttributeOnRange(selStart, selEnd, 'hyperlink');
+    if (DEBUG) console.log('[[ep_hyperlinked_text]] Removing hyperlink attribute from range:', selStart, selEnd, 'by setting to empty string.');
+    docMan.setAttributesOnRange(selStart, selEnd, [['hyperlink', '']]); // Set to empty string to remove/disable
+    if (DEBUG) console.log('[[ep_hyperlinked_text]] Called docMan.setAttributesOnRange(selStart, selEnd, [["hyperlink", ""]])');
   } else {
     // --- ZWSP Strategy at Both Ends --- 
     const ZWSP = '\u200B'; // Zero-Width Space
 
-    // 1. Insert ZWSP at the START of the selection
     if (DEBUG) console.log('[[ep_hyperlinked_text]] Inserting ZWSP at start point:', selStart);
     editorInfo.ace_replaceRange(selStart, selStart, ZWSP);
 
-    // 2. Calculate adjusted end position (original end + 1 for the first ZWSP)
     const adjustedSelEnd = [selEnd[0], selEnd[1] + 1];
     if (DEBUG) console.log('[[ep_hyperlinked_text]] Adjusted end point for second ZWSP:', adjustedSelEnd);
 
-    // 3. Insert ZWSP at the ADJUSTED end point
     editorInfo.ace_replaceRange(adjustedSelEnd, adjustedSelEnd, ZWSP);
 
-    // 4. Calculate the actual range for the link attribute (between the ZWSPs)
-    const linkStart = [selStart[0], selStart[1] + 1]; // Position after first ZWSP
-    const linkEnd = adjustedSelEnd; // Position before second ZWSP
+    const linkStart = [selStart[0], selStart[1] + 1]; 
+    const linkEnd = adjustedSelEnd; 
     if (DEBUG) console.log('[[ep_hyperlinked_text]] Applying hyperlink attribute to range:', linkStart, linkEnd, 'with URL:', url);
     
-    // 5. Apply the hyperlink attribute to the text between the ZWSPs
     docMan.setAttributesOnRange(linkStart, linkEnd, [['hyperlink', url]]);
+    if (DEBUG) console.log('[[ep_hyperlinked_text]] Called docMan.setAttributesOnRange(linkStart, linkEnd, [["hyperlink", url]])');
 
-    // No need to explicitly set cursor, browser behavior should be sufficient.
-
-    // REMOVED previous single ZWSP insertion code:
-    // console.log('[[ep_hyperlinked_text]] Applying hyperlink attribute to range:', selStart, selEnd, 'with URL:', url);
-    // docMan.setAttributesOnRange(selStart, selEnd, [['hyperlink', url]]);
-    // console.log('[[ep_hyperlinked_text]] Inserting ZWSP at end point:', selEnd);
-    // editorInfo.ace_replaceRange(selEnd, selEnd, ZWSP);
+    // Set cursor after the final ZWSP.
+    const finalCursorPos = [linkEnd[0], linkEnd[1] + 1];
+    // We need to use ace_callWithAce to reliably set selection if this function is called from a non-ace context in the future,
+    // but for now, ace_doInsertLink is called from within an ace_callWithAce context.
+    // Directly using editorInfo.ace_setSelectionRange might be okay here if the call chain ensures it.
+    // However, the most robust way for editorInfo to manipulate selection is often via ace_callWithAce if there's any doubt.
+    // For now, let's leave it out to minimize changes from originally working ZWSP addition logic.
+    // editorInfo.ace_setSelectionRange(finalCursorPos, finalCursorPos);
   }
 };
 
@@ -141,6 +333,7 @@ const postToolbarInit = (hook, context) => {
   const hyperlinkInputField = $('#hyperlink-input-field');
   const hyperlinkOkButton = $('#hyperlink-input-ok');
   const hyperlinkCancelButton = $('#hyperlink-input-cancel');
+  const hyperlinkRemoveButton = $('#hyperlink-input-remove'); // New button
 
   // Store selection info AND rep object here
   let storedSelStart = null;
@@ -271,6 +464,34 @@ const postToolbarInit = (hook, context) => {
      storedSelStart = null;
      storedSelEnd = null;
      storedRep = null; // Clear storedRep
+  });
+
+  // 6. Handle Remove Link button click (New Handler)
+  hyperlinkRemoveButton.on('click', () => {
+    if (DEBUG) console.log('[[ep_hyperlinked_text]] Remove Link button clicked.');
+    hyperlinkInputContainer.hide();
+
+    // Check if we have stored selection AND rep (similar to OK button)
+    if (!storedSelStart || !storedSelEnd || !storedRep) {
+      console.error('[[ep_hyperlinked_text]] Cannot remove link: Stored selection or rep is missing.');
+      // No alert needed here, as user might not have intended to remove if no selection was active
+      // Clear potentially partially stored info
+      storedSelStart = null;
+      storedSelEnd = null;
+      storedRep = null;
+      return;
+    }
+
+    // Call doInsertLink with null URL to remove the attribute
+    context.ace.callWithAce((ace) => {
+        if (DEBUG) console.log('[[ep_hyperlinked_text]] Calling bound ace.ace_doInsertLink with NULL URL to remove link.');
+        ace.ace_doInsertLink(null, storedSelStart, storedSelEnd, storedRep);
+    }, 'removeStoredLinkViaBoundFnWithRep', true);
+
+    // Clear stored info after use
+    storedSelStart = null;
+    storedSelEnd = null;
+    storedRep = null;
   });
 
 }; // End of postToolbarInit
