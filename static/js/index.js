@@ -59,9 +59,7 @@ const handleHtmlPaste = function(html, outerContext, aceEditor) {
 
   function extractSegmentsRecursive(node, inheritedUrl) {
     if (node.nodeType === Node.TEXT_NODE) {
-      if (node.textContent.length > 0) {
-        segments.push({text: node.textContent, url: inheritedUrl});
-      }
+      segments.push({text: node.textContent, url: inheritedUrl});
     } else if (node.nodeType === Node.ELEMENT_NODE) {
       let currentUrl = inheritedUrl;
       if (node.nodeName === 'A' && node.getAttribute('href')) {
@@ -122,13 +120,27 @@ const handleHtmlPaste = function(html, outerContext, aceEditor) {
     let currentLine = selStart[0];
     let currentCol = selStart[1];
 
+    // Detect if the insertion target line is part of an ep_tables5 table
+    const docMan = outerContext.documentAttributeManager;
+    let isTableLine = docMan && !!docMan.getAttributeOnLine(currentLine, 'tbljson');
+    if (!isTableLine) {
+      // Fallback: inspect DOM for a dataTable element on the same line
+      try {
+        const lineEntry = rep.lines.atIndex(currentLine);
+        if (lineEntry && lineEntry.lineNode && lineEntry.lineNode.querySelector('table.dataTable[data-tblId]')) {
+          isTableLine = true;
+        }
+      } catch {}
+    }
+
     if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Starting insertion at L${currentLine}C${currentCol}`);
 
     for (let segIdx = 0; segIdx < segments.length; segIdx++) {
       const segment = segments[segIdx];
       if (DEBUG_PASTE) console.log(`[ep_hyperlinked_text ACE_CONTEXT] Processing Segment ${segIdx}:`, JSON.stringify(segment));
       
-      const textToInsert = segment.text;
+      let textToInsert = segment.text;
+      if (isTableLine) textToInsert = textToInsert.replace(/\n+/g, ' ');
 
       // Insert a conditional leading space if needed between segments
       if (segIdx > 0) {
